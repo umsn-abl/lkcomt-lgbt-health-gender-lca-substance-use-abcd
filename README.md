@@ -17,4 +17,4 @@ Please refer to the following link for the accompanying manuscript: [DOI Placeho
 
 ## data
 
-The data used for this analysis came from the Adolescent Brain Cognitive Development Study (ABCD) 5.1 Release, which can be accessed at the following link: dx.doi.org/10.15154/z563-zd24
+The data used for this analysis came from the Adolescent Brain Cognitive Development Study (ABCD) 5.1 Release, which can be accessed at the following link: [https://nda.nih.gov/study.html?id=2313](https://nda.nih.gov/study.html?id=2313)
