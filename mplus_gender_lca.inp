@@ -1,0 +1,30 @@
+Title: 
+  ABCD Gender Latent Class Analysis.
+Data:
+  File is "C:/Users/jjardine/Desktop/ABCD/data/gender_and_sex/mplus_gender_lca.csv";
+Variable:
+  names        = id transn0 transn1 transn2 transn3 transm0 transm1 transm2 transm3
+                    transy0 transy1 transy2 transy3 transu0 transu1 transu2 transu3
+                     felts1  felts2  felts3  felto1  felto2  felto3   wish1   wish2
+                      wish3  exprs1  exprs2  exprs3;
+
+  usevariables =    transn0 transn1 transn2 transn3 transm0 transm1 transm2 transm3
+                    transy0 transy1 transy2 transy3 transu0 transu1 transu2 transu3
+                     felts1  felts2  felts3  felto1  felto2  felto3   wish1   wish2
+                      wish3  exprs1  exprs2  exprs3;
+
+  categorical  =    transn0 transn1 transn2 transn3 transm0 transm1 transm2 transm3
+                    transy0 transy1 transy2 transy3 transu0 transu1 transu2 transu3;
+
+  classes      = c(4);
+
+  missing      = ALL(999);
+
+Analysis: 
+  Type=mixture;
+Savedata:
+  file is "C:/Users/jjardine/Desktop/ABCD/data/gender_and_sex/mplus_gender_lca_c4.txt";
+  save is cprob;
+  format is free;
+output:
+  tech11 tech14;

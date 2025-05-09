@@ -1,0 +1,674 @@
+---
+title: "ABCD Data Prep"
+author: "John Jardine"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: cosmo
+    toc: TRUE
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 100% !important;
+  margin: auto;
+}
+</style>
+
+# Packages
+
+```{r packages, echo = TRUE, message = FALSE}
+if(!("pacman" %in% rownames(installed.packages()))) {install.packages("pacman")}
+if(!("psych" %in% rownames(installed.packages()))) {install.packages("psych")}
+pacman::p_load(dplyr, purrr, tidyr, lubridate)
+```
+
+# Read-In
+
+```{r readin, echo = TRUE, message = FALSE}
+# directory where the input datasets are located
+path = "C:/Users/jjardine/Desktop/ABCD/data/"
+
+# read in the longitudinal tracking dataset
+abcd_y_lt = read.csv(paste0(path, "abcd-data-release-5.1/core/abcd-general/abcd_y_lt.csv"))
+
+# read in the demographics dataset
+abcd_p_demo = read.csv(paste0(path, "abcd-data-release-5.1/core/abcd-general/abcd_p_demo.csv"))
+
+# read in the discrimination scale dataset
+ce_y_dm = read.csv(paste0(path, "abcd-data-release-5.1/core/culture-environment/ce_y_dm.csv"))
+
+# read in the substance use datasets
+su_y_sui = read.csv(paste0(path, "abcd-data-release-5.1/core/substance-use/su_y_sui.csv"))
+su_y_mypi = read.csv(paste0(path, "abcd-data-release-5.1/core/substance-use/su_y_mypi.csv"))
+su_y_path_intuse = read.csv(paste0(path, "abcd-data-release-5.1/core/substance-use/su_y_path_intuse.csv"))
+
+# read in the gender identity and sexual health datasets
+gish_y_gi  = read.csv(paste0(path, "abcd-data-release-5.1/core/gender-identity-sexual-health/gish_y_gi.csv"))
+gish_y_sex = read.csv(paste0(path, "abcd-data-release-5.1/core/gender-identity-sexual-health/gish_y_sex.csv"))
+gish_p_gi  = read.csv(paste0(path, "abcd-data-release-5.1/core/gender-identity-sexual-health/gish_p_gi.csv"))
+gish_p_sex = read.csv(paste0(path, "abcd-data-release-5.1/core/gender-identity-sexual-health/gish_p_sex.csv"))
+
+# read in the child behavior checklist dataset
+mh_p_cbcl = read.csv(paste0(path, "abcd-data-release-5.1/core/mental-health/mh_p_cbcl.csv"))
+
+# read in the ADHD medication dataset created for a previous project
+adhd_meds = read.csv(paste0(path, "adhd_medication/adhd_meds.csv"))
+```
+
+# Longitudinal Tracking
+
+```{r long, echo = TRUE, message = FALSE}
+longNew = abcd_y_lt %>%
+  mutate(
+    # format the date variable and convert the subject's age to years
+    interview_date = mdy(interview_date),
+    interview_age = interview_age / 12) %>%
+  
+  mutate(
+    # create a simpler version of the eventname
+    eventnum = case_match(eventname, 
+                          "baseline_year_1_arm_1"     ~ 0,
+                          "1_year_follow_up_y_arm_1"  ~ 12,
+                          "2_year_follow_up_y_arm_1"  ~ 24,
+                          "3_year_follow_up_y_arm_1"  ~ 36,
+                          "4_year_follow_up_y_arm_1"  ~ 48,
+                          
+                          "6_month_follow_up_arm_1"   ~ 6,
+                          "18_month_follow_up_arm_1"  ~ 18,
+                          "30_month_follow_up_arm_1"  ~ 30,
+                          "42_month_follow_up_arm_1"  ~ 42),
+    
+    # create an indicator so we can track which respondents were present for each event
+    longDummy = 1) %>%
+  
+  # select only the variables of interest
+  select(src_subject_id, eventnum, interview_date, interview_age, site_id_l, rel_family_id, longDummy) %>%
+  
+  # reshape the dataset to a wide format on time
+  pivot_wider(names_from = eventnum, values_from = c(interview_date, interview_age, site_id_l, rel_family_id, longDummy)) %>%
+  
+  # fill in missing values with 0 for the variables indicating if a respondent was present for each event
+  mutate(across(matches("longDummy"), ~ ifelse(is.na(.x), 0, .x))) %>%
+  
+  # remove family ID variables that were created for follow-up events but are all NA
+  select(-c(rel_family_id_6, rel_family_id_12, rel_family_id_18, rel_family_id_24, rel_family_id_30, rel_family_id_36, rel_family_id_42, rel_family_id_48))
+```
+
+# Parent Demographics
+
+```{r demo, echo = TRUE, warning = FALSE}
+demoNew = abcd_p_demo
+
+# get just the baseline events
+demoNew = demoNew %>% filter(eventname == "baseline_year_1_arm_1")
+
+# replace responses of "refused/declined to answer" and "don't know" with NA
+demoNew = demoNew %>%
+  mutate(across(-c(demo_comb_income_v2, demo_ethn_v2, demo_ethn2_v2), ~ ifelse(.x %in% c(777, 999), NA, .x)))
+
+# create a "hispanic" dummy variable
+demoNew = demoNew %>%
+  mutate(hispanic = case_when(demo_ethn_v2 == 1 ~ 1,
+                              demo_ethn_v2 == 2 ~ 0))
+
+# for one case where the skip logic is violated, set the hispanic origin/ancestry group to missing
+demoNew %>% filter(demo_ethn_v2 == 2 & !is.na(demo_ethn2_v2)) %>% nrow()
+demoNew = demoNew %>%
+  mutate(demo_ethn2_v2 = case_when(demo_ethn_v2 == 2 & demo_ethn2_v2 == 13 ~ NA,
+                                   .default = demo_ethn2_v2))
+
+# create a dummy variable for each hispanic origin/ancestry group
+hispanic_groups = c("puerto_rican" = 10, "dominican" = 12, "mexican" = 13, "mexican_american" = 14, "chicano" = 15, "cuban" = 18, "cuban_american" = 19,
+                    "central_south_american" = 20, "other_latin_american" = 40, "other_hispanic" = 41)
+
+for(i in 1:length(hispanic_groups)) {
+  demoNew = demoNew %>%
+    mutate(!!sym(names(hispanic_groups)[i]) := case_when(demo_ethn2_v2 == hispanic_groups[i] ~ 1,
+                                                         demo_ethn_v2 == 2 | (demo_ethn_v2 == 1 & !(demo_ethn2_v2 %in% c(777, 999))) ~ 0))
+}
+rm(i)
+
+# rename the original 19 race variables
+demoNew = demoNew %>%
+  mutate(demo_race_a_p_none = demo_race_a_p___0,
+         demo_race_a_p_white = demo_race_a_p___10,
+         demo_race_a_p_black = demo_race_a_p___11,
+         demo_race_a_p_american_indian = demo_race_a_p___12,
+         demo_race_a_p_alaska_native = demo_race_a_p___13,
+         demo_race_a_p_native_hawaiian = demo_race_a_p___14,
+         demo_race_a_p_guamanian = demo_race_a_p___15,
+         demo_race_a_p_samoan = demo_race_a_p___16,
+         demo_race_a_p_other_pacific_is = demo_race_a_p___17,
+         demo_race_a_p_asian_indian = demo_race_a_p___18,
+         demo_race_a_p_chinese = demo_race_a_p___19,
+         demo_race_a_p_filipino = demo_race_a_p___20,
+         demo_race_a_p_japanese = demo_race_a_p___21,
+         demo_race_a_p_korean = demo_race_a_p___22,
+         demo_race_a_p_vietnamese = demo_race_a_p___23,
+         demo_race_a_p_other_asian = demo_race_a_p___24,
+         demo_race_a_p_other_race = demo_race_a_p___25,
+         demo_race_a_p_refuse_to_answer = demo_race_a_p___77,
+         demo_race_a_p_dont_know = demo_race_a_p___99)
+
+# aggregate the parent/partner education variables into 5 levels:
+# 0 = less than high school
+# 1 = high school
+# 2 = some college
+# 3 = associate's degree
+# 4 = bachelor's degree or higher
+demoNew = demoNew %>%
+  mutate(demo_prnt_ed_v2_agg = case_match(demo_prnt_ed_v2,
+                                          0:11 ~ 0,
+                                          12:14 ~ 1,
+                                          15 ~ 2,
+                                          16:17 ~ 3,
+                                          18:21 ~ 4),
+         demo_prtnr_ed_v2_agg = case_match(demo_prtnr_ed_v2,
+                                           0:11 ~ 0,
+                                           12:14 ~ 1,
+                                           15 ~ 2,
+                                           16:17 ~ 3,
+                                           18:21 ~ 4))
+
+# find the highest level of education between parent and partner. even if the parent has a partner and one of the responses is missing,
+# the non-missing response will be treated as the highest level of education between parent and partner
+demoNew = demoNew %>%
+  mutate(demo_prnt_prtnr_ed_agg = pmax(demo_prnt_ed_v2_agg, demo_prtnr_ed_v2_agg, na.rm = TRUE))
+
+# aggregate the parent marital status variable into a dummy variable:
+# 0 = widowed, divorced, separated, never married, or living with partner
+# 1 = married
+demoNew = demoNew %>%
+  mutate(demo_prnt_marital_v2 = as.numeric(demo_prnt_marital_v2 == 1))
+
+# aggregate the parent/partner employment variables into a dummy variable:
+# 0 = neither parent or partner is working full-time
+# 1 = at least parent or partner is working full-time
+# if the parent does not answer the employment question for themselves nor their partner (assuming they have one), this variable will be NA. the only
+# other scenario in which this variable will be NA is if the respondent indicates that they or their partner (if they have one) works full-time/part-time
+# (employment option 1), but does not specify between full-time and part-time
+demoNew = demoNew %>%
+  mutate(demo_prnt_prtnr_empl = case_when(demo_prnt_empl_v2==1 & demo_prnt_empl_time==1 ~ 1,
+                                          demo_prtnr_empl_v2==1 & demo_prtnr_empl_time==1 ~ 1,
+                                          demo_prnt_empl_v2==1 & is.na(demo_prnt_empl_time) ~ NA,
+                                          demo_prtnr_empl_v2==1 & is.na(demo_prtnr_empl_time) ~ NA,
+                                          is.na(demo_prnt_empl_v2) & is.na(demo_prtnr_empl_v2) ~ NA,
+                                          .default = 0))
+
+# aggregate the combined income variable into 7 levels:
+# 0 = 24999 and lower (1:4)
+# 1 = 25000 to 49999 (5:6)
+# 2 = 50000 to 74999 (7)
+# 3 = 75000 to 99999 (8)
+# 4 = 100000 and greater (9:10)
+# 5 = don't know
+# 6 = refused
+demoNew = demoNew %>%
+  mutate(demo_comb_income_agg = case_match(demo_comb_income_v2,
+                                           1:4 ~ 0,
+                                           5:6 ~ 1,
+                                           7 ~ 2,
+                                           8 ~ 3,
+                                           9:10 ~ 4,
+                                           999 ~ 5,
+                                           777 ~ 6))
+
+# select only the variables of interest
+demoNew = demoNew %>%
+  select(src_subject_id, matches("^demo_race_a_p_[^0-9]*$"), race_ethnicity, demo_ethn_v2, demo_ethn2_v2, hispanic, all_of(names(hispanic_groups)), demo_prnt_marital_v2, demo_prnt_prtnr_ed_agg, demo_prnt_prtnr_empl, demo_comb_income_agg)
+
+# add a subscript onto each variable name indicating they are for the baseline events only
+names(demoNew)[-1] = paste0(names(demoNew)[-1], "_0")
+```
+
+# Discrimination Scale
+
+```{r discrimination, echo = TRUE, warning = FALSE}
+discNew = ce_y_dm
+
+discNew = discNew %>%
+  
+  # remove baseline since the discrimination items were not asked at this event
+  filter(eventname != "baseline_year_1_arm_1") %>%
+  
+  mutate(
+    # create a simpler numeric version of the eventname
+    eventnum = case_match(eventname,
+                          "1_year_follow_up_y_arm_1" ~ 12,
+                          "2_year_follow_up_y_arm_1" ~ 24,
+                          "4_year_follow_up_y_arm_1" ~ 48),
+    
+    # recode the yes/no discrimination items into dummy variables (values of "don't know" and "refused to answer" are set to missing)
+    across(c(dim_yesno_q1, dim_yesno_q2), ~ case_when(.x == 0 ~ 0,
+                                                      .x == 1 ~ 1)))
+
+# create dichotomous versions of the "measure of perceived discrimination" items such that 0 = almost never; 1 = rarely, sometimes, often, or very often (values of "don't know" and "refused to answer" are set to missing)
+for(i in 1:7) {
+  discNew = discNew %>%
+    mutate(!!sym(paste0("dim_matrix_q", i, "_b")) := case_when(!!sym(paste0("dim_matrix_q", i)) == 1 ~ 0,
+                                                               !!sym(paste0("dim_matrix_q", i)) %in% 2:5 ~ 1))
+}; rm(i)
+
+# check the cronbach's alpha for the 9 binary discrimination items
+psych::alpha(discNew %>% select(dim_yesno_q1, dim_yesno_q2, dim_matrix_q1_b, dim_matrix_q2_b, dim_matrix_q3_b, dim_matrix_q4_b, dim_matrix_q5_b, dim_matrix_q6_b, dim_matrix_q7_b))[["total"]][["raw_alpha"]]
+
+discNew = discNew %>%
+  mutate(
+    # calculate the sum of the "yes" / "1" responses for the nine discrimination items
+    disc_num = rowSums(select(., c(dim_yesno_q1, dim_yesno_q2, dim_matrix_q1_b, dim_matrix_q2_b, dim_matrix_q3_b, dim_matrix_q4_b, dim_matrix_q5_b, dim_matrix_q6_b, dim_matrix_q7_b)), na.rm = TRUE),
+    
+    # calculate how many non-missing responses there are for the nine discrimination items
+    disc_den = rowSums(!is.na(select(., c(dim_yesno_q1, dim_yesno_q2, dim_matrix_q1_b, dim_matrix_q2_b, dim_matrix_q3_b, dim_matrix_q4_b, dim_matrix_q5_b, dim_matrix_q6_b, dim_matrix_q7_b)))))
+
+# select just the variables of interest
+discNew = discNew %>% select(src_subject_id, eventnum, dim_yesno_q1, dim_yesno_q2, dim_y_ss_mean, disc_num, disc_den)
+
+# reshape the dataset to a wide format on time
+discNew = discNew %>% pivot_wider(names_from = eventnum, values_from = c(dim_yesno_q1, dim_yesno_q2, dim_y_ss_mean, disc_num, disc_den))
+```
+
+# Youth Substance Use Interview
+
+```{r substance_main, echo = TRUE, message = FALSE}
+# collapse time-repeated variables into a single column
+long_vars = c("tlfb_alc", "tlfb_alc_sip", "tlfb_alc_use",
+              
+              "tlfb_tob", "tlfb_tob_puff", "tlfb_cig_use", "tlfb_ecig_use", "tlfb_chew_use", "tlfb_cigar_use", "tlfb_hookah_use", "tlfb_pipes_use", "tlfb_nicotine_use",
+              
+              "tlfb_mj", "tlfb_mj_puff", "tlfb_mj_use", "tlfb_blunt_use", "tlfb_edible_use", "tlfb_mj_conc_use", "tlfb_mj_drink_use", "tlfb_tincture_use")
+
+subMain = su_y_sui
+for(i in long_vars) {
+  subMain = subMain %>%
+    mutate(!!sym(i) := ifelse(eventname == "baseline_year_1_arm_1", !!sym(i), !!sym(paste0(i, "_l")))) %>%
+    select(-!!sym(paste0(i, "_l")))
+}
+rm(long_vars, i)
+
+# create summary substance use measures
+subMain = subMain %>%
+  mutate(
+    
+    # dummy variable for had a full drink of alcohol
+    drink_bool = case_when(tlfb_alc_use == 1 ~ 1,
+                           tlfb_alc == 0 | tlfb_alc_sip == 0 | tlfb_alc_use == 0 ~ 0),
+    
+    # dummy variable for used a tobacco cigarette (more than a puff)
+    cig_bool = case_when(tlfb_cig_use == 1 ~ 1,
+                         tlfb_tob == 0 | tlfb_tob_puff == 0 | tlfb_cig_use == 0 ~ 0),
+    
+    # dummy variable for used an e-cigarette (more than a puff)
+    ecig_bool = case_when(tlfb_ecig_use == 1 ~ 1,
+                          tlfb_tob == 0 | tlfb_tob_puff == 0 | tlfb_ecig_use == 0 ~ 0),
+    
+    # dummy variable for used smokeless tobacco
+    chew_bool = case_when(tlfb_chew_use == 1 ~ 1,
+                          tlfb_tob == 0 | tlfb_chew_use == 0 ~ 0),
+    
+    # dummy variable for used a cigar
+    cigar_bool = case_when(tlfb_cigar_use == 1 ~ 1,
+                           tlfb_tob == 0 | tlfb_cigar_use == 0 | (eventname != "baseline_year_1_arm_1" & tlfb_tob_puff == 0) ~ 0),
+    
+    # dummy variable for used hookah
+    hookah_bool = case_when(tlfb_hookah_use == 1 ~ 1,
+                            tlfb_tob == 0 | tlfb_hookah_use == 0 | (eventname != "baseline_year_1_arm_1" & tlfb_tob_puff == 0) ~ 0),
+    
+    # dummy variable for used a pipe
+    pipes_bool = case_when(tlfb_pipes_use == 1 ~ 1,
+                           tlfb_tob == 0 | tlfb_pipes_use == 0 | (eventname != "baseline_year_1_arm_1" & tlfb_tob_puff == 0) ~ 0),
+    
+    # dummy variable for used a nicotine replacement
+    nicotine_bool = case_when(tlfb_nicotine_use == 1 ~ 1,
+                              tlfb_tob == 0 | tlfb_nicotine_use == 0 ~ 0),
+    
+    # dummy variable for used tobacco / nicotine in any form (including just a puff of a tobacco product)
+    tob_bool = case_when(tlfb_tob_puff == 1 | cig_bool == 1 | ecig_bool == 1 | chew_bool == 1 | cigar_bool == 1 | hookah_bool == 1 | pipes_bool == 1 | nicotine_bool == 1 ~ 1,
+                         (tlfb_tob == 0 | tlfb_tob_puff == 0) & cig_bool == 0 & ecig_bool == 0 & chew_bool == 0 & cigar_bool == 0 & hookah_bool == 0 & pipes_bool == 0 & nicotine_bool == 0 ~ 0),
+    
+    # dummy variable for smoked marijuana (more than a puff)
+    mj_smoke_bool = case_when(tlfb_mj_use == 1 ~ 1,
+                              tlfb_mj == 0 | tlfb_mj_puff == 0 | tlfb_mj_use == 0 ~ 0),
+    
+    # dummy variable for used a blunt
+    mj_blunt_bool = case_when(tlfb_blunt_use == 1 ~ 1,
+                              tlfb_mj == 0 | tlfb_mj_puff == 0 | tlfb_blunt_use == 0 ~ 0),
+    
+    # dummy variable for ate marijuana
+    mj_edible_bool = case_when(tlfb_edible_use == 1 ~ 1,
+                               tlfb_mj == 0 | tlfb_mj_puff == 0 | tlfb_edible_use == 0 ~ 0),
+    
+    # dummy variable for used marijuana oils or concentrates
+    mj_conc_bool = case_when(tlfb_mj_conc_use == 1 ~ 1,
+                             tlfb_mj == 0 | tlfb_mj_conc_use == 0 | (!(eventname %in% c("baseline_year_1_arm_1", "1_year_follow_up_y_arm_1")) & tlfb_mj_puff == 0) ~ 0),
+    
+    # dummy variable for had a marijuana infused alcohol drink
+    mj_drink_bool = case_when(tlfb_mj_drink_use == 1 ~ 1,
+                              tlfb_mj == 0 | tlfb_mj_drink_use == 0 | (!(eventname %in% c("baseline_year_1_arm_1", "1_year_follow_up_y_arm_1")) & tlfb_mj_puff == 0) ~ 0),
+    
+    # dummy variable for used a concentrated marijuana tincture
+    mj_tincture_bool = case_when(tlfb_tincture_use == 1 ~ 1,
+                                 tlfb_mj == 0 | tlfb_tincture_use == 0 | (!(eventname %in% c("baseline_year_1_arm_1", "1_year_follow_up_y_arm_1")) & tlfb_mj_puff == 0) ~ 0),
+    
+    # dummy variable for vaped marijuana flower or bud
+    mj_vape_fl_bool = case_when(su_tlfb_vape_mj_fl_use == 1 ~ 1,
+                                tlfb_mj == 0 | tlfb_mj_puff == 0 | su_tlfb_vape_mj_fl_use == 0 ~ 0),
+    
+    # dummy variable for vaped marijuana oils or concentrates
+    mj_vape_oils_bool = case_when(su_tlfb_vape_mj_oils_use == 1 ~ 1,
+                                  tlfb_mj == 0 | tlfb_mj_puff == 0 | su_tlfb_vape_mj_oils_use == 0 ~ 0),
+    
+    # dummy variable for used marijuana in any form (including just a puff)
+    mj_bool = case_when(tlfb_mj_puff == 1 | mj_smoke_bool == 1 | mj_blunt_bool == 1 | mj_edible_bool == 1 | mj_conc_bool == 1 | mj_drink_bool == 1 | mj_tincture_bool == 1 | mj_vape_fl_bool == 1 | mj_vape_oils_bool == 1 ~ 1,
+                        (tlfb_mj == 0 | tlfb_mj_puff == 0) & mj_smoke_bool == 0 & mj_blunt_bool == 0 & mj_edible_bool == 0 & mj_conc_bool == 0 & mj_drink_bool == 0 & mj_tincture_bool == 0 & mj_vape_fl_bool == 0 & mj_vape_oils_bool == 0 ~ 0),
+    
+    # dummy variable for heard of alcohol, such as beer, wine or liquor
+    alc_heard = tlfb_alc,
+    
+    # dummy variable for heard of tobacco products, such as cigarettes, smokeless tobacco, cigars, hookah, electronic or e-cigarettes
+    tob_heard = tlfb_tob,
+    
+    # dummy variable for heard of marijuana, weed, pot, blunts, dabs, marijuana drinks or food with marijuana
+    mj_heard = tlfb_mj)
+
+# select only the identifying variables and the summary substance use measures
+subMain = subMain %>% select(src_subject_id, eventname, alc_heard, tob_heard, mj_heard, drink_bool, tob_bool, mj_bool)
+```
+
+# Youth Substance Use Phone Interview - Mid-Year
+
+```{r substance_mid, echo = TRUE, message = FALSE}
+subMid = su_y_mypi
+
+# create summary substance use measures
+subMid = subMid %>%
+  mutate(
+    
+    # dummy variable for had a full drink of alcohol
+    drink_bool = case_when(mypi_alc_full_drink == 1 ~ 1,
+                           mypi_alc == 0 | mypi_alc_full_drink == 0 ~ 0),
+    
+    # dummy variable for smoked a full cigarette, cigar, or pipe, or had multiple puffs of hookah or an e-cigarette
+    tob_smoke_any_bool = case_when(mypi_tob_used == 1 | mypi_full_cig == 1 | mypi_tobo_used == 1 | mypi_cigar_used == 1 ~ 1,
+                                   eventname %in% c("6_month_follow_up_arm_1", "18_month_follow_up_arm_1") & (mypi_tob == 0 | mypi_ecig == 0 | mypi_tob_used == 0) ~ 0,
+                                   eventname %in% c("30_month_follow_up_arm_1", "42_month_follow_up_arm_1") & (mypi_ecig == 0 | (mypi_full_cig == 0 & mypi_tobo_used == 0 & mypi_cigar_used == 0)) ~ 0),
+    
+    # dummy variable for used smokeless tobacco
+    chew_bool = case_when(mypi_chew_pst_used == 1 ~ 1,
+                          mypi_chew == 0 | mypi_chew_pst_used == 0 ~ 0),
+    
+    # dummy variable for used tobacco / nicotine in any form (including just a puff of a tobacco product)
+    tob_bool = case_when(mypi_ecig == 1 | tob_smoke_any_bool == 1 | chew_bool == 1 ~ 1,
+                         (mypi_tob == 0 | mypi_ecig == 0) & tob_smoke_any_bool == 0 & chew_bool == 0 ~ 0),
+    
+    # dummy variable for smoked marijuana flower or bud in a pipe, joint, hookah or bong
+    mj_smoke_any_bool = case_when(mypi_mj_used == 1 ~ 1,
+                                  mypi_mj == 0 | mypi_mj_30 == 0 | mypi_mj_used == 0 ~ 0),
+    
+    # dummy variable for ate marijuana
+    mj_edible_bool = case_when(mypi_mj_edible == 1 ~ 1,
+                               mypi_mj == 0 | mypi_mj_30 == 0 | mypi_mj_edible == 0 ~ 0),
+    
+    # dummy variable for used marijuana oils or concentrates
+    mj_conc_bool = case_when(mypi_mj_oils == 1 ~ 1,
+                             mypi_mj == 0 | mypi_mj_30 == 0 | mypi_mj_oils == 0 ~ 0),
+    
+    # dummy variable for had a marijuana infused alcohol drink or marijuana tincture
+    mj_drink_tincture_bool = case_when(mypi_mj_tinc_used == 1 ~ 1,
+                                       mypi_mj == 0 | mypi_mj_30 == 0 | mypi_mj_tinc_used == 0 ~ 0),
+    
+    # dummy variable for vaped marijuana oils or concentrates (30- and 42-month follow-ups only)
+    mj_vape_oils_bool = case_when(eventname %in% c("30_month_follow_up_arm_1", "42_month_follow_up_arm_1") & mypi_mj_oils_vaped == 1 ~ 1,
+                                  eventname %in% c("30_month_follow_up_arm_1", "42_month_follow_up_arm_1") & (mypi_mj_30 == 0 | mypi_mj_oils_vaped == 0) ~ 0),
+    
+    # dummy variable for vaped marijuana flower or bud (30- and 42-month follow-ups only)
+    mj_vape_fl_bool = case_when(eventname %in% c("30_month_follow_up_arm_1", "42_month_follow_up_arm_1") & mypi_mj_vape == 1 ~ 1,
+                                eventname %in% c("30_month_follow_up_arm_1", "42_month_follow_up_arm_1") & (mypi_mj_30 == 0 | mypi_mj_vape == 0) ~ 0),
+    
+    # dummy variable for used marijuana in any form (including just a puff)
+    mj_bool = case_when(mypi_mj_30 == 1 | mj_smoke_any_bool == 1 | mj_edible_bool == 1 | mj_conc_bool == 1 | mj_drink_tincture_bool == 1 | mj_vape_oils_bool == 1 | mj_vape_fl_bool == 1 ~ 1,
+                        eventname %in% c("6_month_follow_up_arm_1", "18_month_follow_up_arm_1") & mj_smoke_any_bool == 0 & mj_edible_bool == 0 & mj_conc_bool == 0 & mj_drink_tincture_bool == 0 ~ 0,
+                        eventname %in% c("30_month_follow_up_arm_1", "42_month_follow_up_arm_1") & mypi_mj_30 == 0 & mj_smoke_any_bool == 0 & mj_edible_bool == 0 & mj_conc_bool == 0 & mj_drink_tincture_bool == 0 & mj_vape_oils_bool == 0 & mj_vape_fl_bool == 0 ~ 0))
+
+# select only the identifying variables and the summary substance use measures
+subMid = subMid %>% select(src_subject_id, eventname, drink_bool, tob_bool, mj_bool)
+```
+
+# Combine Substance Use Datasets
+
+```{r comb_substance, echo = TRUE, message = FALSE}
+# recode the event names so that each mid-year phone interview is associated with its corresponding full-year follow-up event
+subMid = subMid %>%
+  mutate(eventname = case_match(eventname,
+                                "6_month_follow_up_arm_1"  ~ "1_year_follow_up_y_arm_1",
+                                "18_month_follow_up_arm_1" ~ "2_year_follow_up_y_arm_1",
+                                "30_month_follow_up_arm_1" ~ "3_year_follow_up_y_arm_1",
+                                "42_month_follow_up_arm_1" ~ "4_year_follow_up_y_arm_1"))
+
+# change the variable names so the datasets can be joined together
+names(subMain)[-c(1:5)] = paste0(names(subMain)[-c(1:5)], "_f")
+names(subMid)[-c(1:2)] = paste0(names(subMid)[-c(1:2)], "_m")
+
+# join the full-year and mid-year datasets
+subAll = full_join(subMain, subMid, by = c("src_subject_id", "eventname"))
+
+subAll = subAll %>%
+  mutate(
+    # combine the substance use variables from the full-year and mid-year events to leverage all available information
+    drink_bool_b = pmax(drink_bool_f, drink_bool_m, na.rm = TRUE),
+    tob_bool_b = pmax(tob_bool_f, tob_bool_m, na.rm = TRUE),
+    mj_bool_b = pmax(mj_bool_f, mj_bool_m,  na.rm = TRUE),
+    
+    # create a simpler numeric version of the eventname
+    eventnum = case_match(eventname, 
+                          "baseline_year_1_arm_1"    ~ 0,
+                          "1_year_follow_up_y_arm_1" ~ 12,
+                          "2_year_follow_up_y_arm_1" ~ 24,
+                          "3_year_follow_up_y_arm_1" ~ 36,
+                          "4_year_follow_up_y_arm_1" ~ 48)) %>%
+  
+  # reshape the dataset to a wide format on time
+  pivot_wider(names_from = eventnum, values_from = c(alc_heard, tob_heard, mj_heard, drink_bool_f, tob_bool_f, mj_bool_f, drink_bool_m, tob_bool_m, mj_bool_m, drink_bool_b, tob_bool_b, mj_bool_b), id_cols = src_subject_id) %>%
+  
+  # remove variables that were not asked at certain events
+  select(-c(alc_heard_36, alc_heard_48, tob_heard_36, tob_heard_48, mj_heard_36, mj_heard_48, drink_bool_m_0, tob_bool_m_0, mj_bool_m_0))
+
+# rename variables to be consistent with the current wide-format naming scheme
+names(subAll) = gsub("f_", "", names(subAll))
+names(subAll) = gsub("m_12", "6", names(subAll))
+names(subAll) = gsub("m_24", "18", names(subAll))
+names(subAll) = gsub("m_36", "30", names(subAll))
+names(subAll) = gsub("m_48", "42", names(subAll))
+
+# re-arrange the columns for readability
+subAll = subAll %>%
+  select(src_subject_id, alc_heard_0, alc_heard_12, alc_heard_24, tob_heard_0, tob_heard_12, tob_heard_24, mj_heard_0, mj_heard_12, mj_heard_24,
+         
+         drink_bool_0, drink_bool_b_0, drink_bool_6, drink_bool_12, drink_bool_b_12, drink_bool_18, drink_bool_24, drink_bool_b_24, drink_bool_30, drink_bool_36, drink_bool_b_36, drink_bool_42, drink_bool_48, drink_bool_b_48,
+           tob_bool_0,   tob_bool_b_0,   tob_bool_6,   tob_bool_12,   tob_bool_b_12,   tob_bool_18,   tob_bool_24,   tob_bool_b_24,   tob_bool_30,   tob_bool_36,   tob_bool_b_36,   tob_bool_42,   tob_bool_48,   tob_bool_b_48,
+            mj_bool_0,    mj_bool_b_0,    mj_bool_6,    mj_bool_12,    mj_bool_b_12,    mj_bool_18,    mj_bool_24,    mj_bool_b_24,    mj_bool_30,    mj_bool_36,    mj_bool_b_36,    mj_bool_42,    mj_bool_48,    mj_bool_b_48)
+```
+
+# Youth PATH Intention to Use
+
+```{r intent, echo = TRUE, message = FALSE}
+# collapse time-repeated variables into a single column
+long_vars = c("path_alc_youth2", "path_alc_youth3", "path_alc_youth5", "path_alc_youth6")
+
+subIntent = su_y_path_intuse
+for(i in long_vars) {
+  subIntent = subIntent %>%
+    mutate(!!sym(i) := ifelse(eventname == "baseline_year_1_arm_1", !!sym(i), !!sym(paste0(i, "_l")))) %>%
+    select(-!!sym(paste0(i, "_l")))
+}
+rm(long_vars, i)
+
+# collapse time-repeated variables into a single column
+subIntent = subIntent %>%
+  mutate(path_alc_youth1 = case_when(eventname == "baseline_year_1_arm_1" ~ path_alc_youth1,
+                                     eventname %in% c("1_year_follow_up_y_arm_1", "2_year_follow_up_y_arm_1") ~ path_alc_youth1_l,
+                                     eventname %in% c("3_year_follow_up_y_arm_1", "4_year_follow_up_y_arm_1") & (path_alc_youth1a_l %in% 1:4 | path_alc_youth1b_l %in% 1:4) ~ pmin(path_alc_youth1a_l, path_alc_youth1b_l, na.rm = TRUE),
+                                     eventname %in% c("3_year_follow_up_y_arm_1", "4_year_follow_up_y_arm_1") & (path_alc_youth1a_l == 5 | path_alc_youth1b_l == 5) ~ 5,
+                                     eventname %in% c("3_year_follow_up_y_arm_1", "4_year_follow_up_y_arm_1") & path_alc_youth1a_l == 6 & path_alc_youth1b_l == 6 ~ 6),
+         
+         path_alc_youth4 = case_when(eventname == "baseline_year_1_arm_1" ~ path_alc_youth4,
+                                     eventname %in% c("1_year_follow_up_y_arm_1", "2_year_follow_up_y_arm_1") ~ path_alc_youth4_l,
+                                     eventname %in% c("3_year_follow_up_y_arm_1", "4_year_follow_up_y_arm_1") & (path_alc_youth4a_l %in% 1:4 | path_alc_youth4b_l %in% 1:4) ~ pmin(path_alc_youth4a_l, path_alc_youth4b_l, na.rm = TRUE),
+                                     eventname %in% c("3_year_follow_up_y_arm_1", "4_year_follow_up_y_arm_1") & (path_alc_youth4a_l == 5 | path_alc_youth4b_l == 5) ~ 5,
+                                     eventname %in% c("3_year_follow_up_y_arm_1", "4_year_follow_up_y_arm_1") & path_alc_youth4a_l == 6 & path_alc_youth4b_l == 6 ~ 6))
+
+subIntent = subIntent %>%
+  mutate(
+    # dichotomize the substance use curiosity and intention variables
+    # for the curiosity variables: 0 = not at all curious, 1 = a little curious to very curious.
+    # for the "try soon" variables: 0 = probably not to definitely not, 1 = probably yes to definitely yes
+    tob_any_curious = case_when(path_alc_youth1 == 4 ~ 0,
+                                path_alc_youth1 %in% 1:3 ~ 1),
+    
+    alc_any_curious = case_when(path_alc_youth2 == 4 ~ 0,
+                                path_alc_youth2 %in% 1:3 ~ 1),
+    
+    mj_any_curious = case_when(path_alc_youth3 == 4 ~ 0,
+                               path_alc_youth3 %in% 1:3 ~ 1),
+    
+    tob_try_soon = case_when(path_alc_youth4 %in% 3:4 ~ 0,
+                             path_alc_youth4 %in% 1:2 ~ 1),
+    
+    alc_try_soon = case_when(path_alc_youth5 %in% 3:4 ~ 0,
+                             path_alc_youth5 %in% 1:2 ~ 1),
+    
+    mj_try_soon = case_when(path_alc_youth6 %in% 3:4 ~ 0,
+                            path_alc_youth6 %in% 1:2 ~ 1),
+    
+    # create a simpler numeric version of the eventname
+    eventnum = case_match(eventname, 
+                          "baseline_year_1_arm_1"    ~ 0,
+                          "1_year_follow_up_y_arm_1" ~ 12,
+                          "2_year_follow_up_y_arm_1" ~ 24,
+                          "3_year_follow_up_y_arm_1" ~ 36,
+                          "4_year_follow_up_y_arm_1" ~ 48)) %>%
+  
+  # select just the variables of interest
+  select(src_subject_id, eventnum, matches("curious|soon")) %>%
+  
+  # reshape the dataset to a wide format on time
+  pivot_wider(names_from = eventnum, values_from = -all_of(c("src_subject_id", "eventnum")))
+```
+
+# Gender Identity and Sexual Health
+
+```{r gish, echo = TRUE, message = FALSE}
+# combine all the gender identity and sexual health datasets with a full-join
+gish = list(gish_y_gi, gish_p_gi, gish_y_sex, gish_p_sex) %>% reduce(full_join, by = c("src_subject_id", "eventname"))
+
+gish = gish %>%
+  group_by(src_subject_id) %>%
+  mutate(
+    # propagate the "sex at birth" variable through to all events
+    demo_sex_v2 = demo_sex_v2[eventname == "baseline_year_1_arm_1"],
+    # create a binary version of "sex at birth" where 0 = male or intersex-male, 1 = female or intersex-female
+    sex_at_birth = case_when(demo_sex_v2 %in% c(1, 3) ~ 0,
+                             demo_sex_v2 %in% c(2, 4) ~ 1)) %>%
+  ungroup()
+
+gish = gish %>%
+  mutate(
+    # create a simpler numeric version of the eventname
+    eventnum = case_match(eventname, 
+                          "baseline_year_1_arm_1"    ~ 0,
+                          "1_year_follow_up_y_arm_1" ~ 12,
+                          "2_year_follow_up_y_arm_1" ~ 24,
+                          "3_year_follow_up_y_arm_1" ~ 36,
+                          "4_year_follow_up_y_arm_1" ~ 48))
+
+gish = gish %>%
+  mutate(
+    # the following variables are available year 1 - year 4 and are on a 5-point scale,
+    # with a higher score indicating greater gender conformity / congruence with sex at birth.
+    # responses of "decline to answer" are treated as missing
+    
+    # does the child feel like their sex at birth
+    felt_gender_same_y   = case_when(sex_at_birth == 0 & gish_m1_y != 0 ~ gish_m1_y,
+                                     sex_at_birth == 1 & gish_f1_y != 0 ~ gish_f1_y),
+    
+    # does the child feel like the opposite sex
+    felt_gender_opp_y    = case_when(sex_at_birth == 0 & gish_m2_y != 0 ~ gish_m2_y,
+                                     sex_at_birth == 1 & gish_f2_y != 0 ~ gish_f2_y),
+    
+    # how much does the child wish to be the opposite sex
+    wish_gender_opp_y    = case_when(sex_at_birth == 0 & gish_m3_y != 0 ~ gish_m3_y,
+                                     sex_at_birth == 1 & gish_f3_y != 0 ~ gish_f3_y),
+    
+    # how much has the child dressed or acted like the opposite sex during play
+    gender_express_opp_y = case_when(sex_at_birth == 0 & gish_m4_y != 0 ~ gish_m4_y,
+                                     sex_at_birth == 1 & gish_f4_y != 0 ~ gish_f4_y))
+
+# collapse the time-repeated gender identity variable (parent-reported) into a single column
+gish = gish %>%
+  mutate(demo_gender_id_v2 = case_when(eventname == "baseline_year_1_arm_1" ~ demo_gender_id_v2,
+                                       eventname != "baseline_year_1_arm_1" ~ demo_gender_id_v2_l))
+
+gish = gish %>%
+  # select just the variables of interest
+  select(src_subject_id, eventnum, demo_sex_v2, sex_at_birth, demo_gender_id_v2, kbi_y_trans_id, felt_gender_same_y, felt_gender_opp_y, wish_gender_opp_y, gender_express_opp_y) %>%
+  
+  # reshape the dataset to a wide format on time
+  pivot_wider(names_from = eventnum, values_from = c(demo_sex_v2, sex_at_birth, demo_gender_id_v2, kbi_y_trans_id, felt_gender_same_y, felt_gender_opp_y, wish_gender_opp_y, gender_express_opp_y))
+
+# remove variables that were not asked at certain events
+gish = gish %>%
+  select(-c(demo_sex_v2_12, demo_sex_v2_24, demo_sex_v2_36, demo_sex_v2_48, sex_at_birth_12, sex_at_birth_24, sex_at_birth_36, sex_at_birth_48,
+            felt_gender_same_y_0, felt_gender_opp_y_0, wish_gender_opp_y_0, gender_express_opp_y_0))
+```
+
+# Child Behavior Checklist
+
+```{r cbcl, echo = TRUE, message = FALSE}
+cbclNew = mh_p_cbcl %>%
+  # create a simpler numeric version of the eventname
+  mutate(eventnum = case_match(eventname, 
+                               "baseline_year_1_arm_1"    ~ 0,
+                               "1_year_follow_up_y_arm_1" ~ 12,
+                               "2_year_follow_up_y_arm_1" ~ 24,
+                               "3_year_follow_up_y_arm_1" ~ 36,
+                               "4_year_follow_up_y_arm_1" ~ 48))
+
+cbclNew = cbclNew %>%
+  # select just just the identifying information and t-scores
+  select(src_subject_id, eventnum, matches("_t$")) %>%
+  
+  # reshape the dataset to a wide format on time
+  pivot_wider(names_from = eventnum, values_from = -all_of(c("src_subject_id", "eventnum")))
+```
+
+# ADHD Medications
+
+```{r adhd_meds, echo = TRUE, message = FALSE}
+adhdNew = adhd_meds %>%
+  # convert the boolean variables for stimulant and non-stimulant adhd medication use to a 0/1 format
+  mutate(across(c(adhdStim, adhdNonStim), as.numeric))
+
+adhdNew = adhdNew %>%
+  # create a simpler numeric version of the eventname
+  mutate(eventnum = case_match(eventname, 
+                               "baseline_year_1_arm_1"    ~ 0,
+                               "1_year_follow_up_y_arm_1" ~ 12,
+                               "2_year_follow_up_y_arm_1" ~ 24,
+                               "3_year_follow_up_y_arm_1" ~ 36,
+                               "4_year_follow_up_y_arm_1" ~ 48),
+         
+         eventname = NULL) %>%
+  
+  # reshape the dataset to a wide format on time
+  pivot_wider(names_from = eventnum, values_from = c(adhdStim, adhdNonStim))
+```
+
+# Combine All Datasets
+
+```{r comb_all, echo = TRUE, message = FALSE}
+# combine all the datasets in wide-format with a full-join
+abcd_master = list(longNew, demoNew, discNew, subAll, subIntent, gish, cbclNew, adhdNew) %>% reduce(full_join, by = c("src_subject_id"))
+
+# save the file locally
+save(abcd_master, file = paste0(path, "master/abcd_master.RDa"))
+```
