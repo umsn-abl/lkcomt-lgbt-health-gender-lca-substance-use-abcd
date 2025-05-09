@@ -7,7 +7,7 @@ This code uses ABCD Release 5.1 data to perform a latent class analysis using me
 ## files
 
 [abcd_master.Rmd](abcd_master.Rmd) is an R Markdown script that performs general data munging.  
-[abcd_gender_and_sex_tables.Rmd](abcd_gender_and_sex_tables.Rmd) is an R Markdown script that prepares the data for analysis, estimates descriptive statistics, and generates tables and plots.  
+[abcd_gender_tables.Rmd](abcd_gender_tables.Rmd) is an R Markdown script that prepares the data for analysis, estimates descriptive statistics, and generates tables and plots.  
 [mplus_gender_lca.inp](mplus_gender_lca.inp) is an Mplus script that performs a latent class analysis using the gender identity and expression measures.  
 [abcd_gender_models.do](abcd_gender_models.do) is a Stata do file that performs multinomial logistic regression and binary logistic regression (with GEE).  
 
